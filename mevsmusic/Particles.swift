@@ -23,6 +23,7 @@ class SpriteParticles {
             let material = SCNMaterial()
             material.lightingModel = .constant
             material.diffuse.contents = UIImage(named: imageName)
+            material.diffuse.mipFilter = .linear    // trilinear: no shimmer at distance
             material.isDoubleSided = true
             material.writesToDepthBuffer = false
             material.blendMode = blendMode
