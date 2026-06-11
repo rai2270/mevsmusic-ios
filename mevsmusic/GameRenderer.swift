@@ -1,0 +1,365 @@
+import SceneKit
+
+// FlyingRenderer.java port: owns the SceneKit scene and the frame loop. All game
+// rules live in GameLogic; this class feeds it inputs (time, FFT data, collisions)
+// and applies its outputs to the scene. The world uses the Android renderer's
+// collision space — its display space was x-mirrored from this one, and collision
+// space is the self-consistent frame where chords chase the ship, bullets fly
+// along its heading and the camera trails behind it.
+final class GameRenderer: NSObject, SCNSceneRendererDelegate {
+
+    static let roomSize: Float = 200
+    static let roomHalf = roomSize / 2
+    static let roomEdge: Float = 1
+    static let worldLimit = roomHalf - roomEdge              // GAME_WORLD_X/Y/Z_SPACE
+    static let inactivePosition = simd_float3(repeating: roomSize * 1.5)
+    static let spectrumTop = SpectrumBar.size * SpectrumBar.yFactor * GameLogic.spectrumMaxValue
+
+    private static let chordsPerGroup = 40
+    private static let groupCount = 3
+    private static let bulletCount = chordsPerGroup * groupCount
+    private static let collisionDistance: Float = 2.0
+
+    let scene = SCNScene()
+    let cameraNode = SCNNode()
+
+    private let logic: GameLogic
+    private let audio: AudioEngine
+    private weak var events: GameEvents?
+
+    private let ship: Ship
+    private let bars: [SpectrumBar]
+    private let bullets = BulletParticles(count: GameRenderer.bulletCount)
+    private let chordGroups: [ChordParticles]
+    private let bonuses: [BonusParticles]
+    private let bonusPositions: [simd_float3]
+
+    private var cameraYaw: Float = 0
+    private var lastTime: TimeInterval?
+    private var shipFlashApplied = false
+    private var gameOverSceneCleaned = false
+
+    // Input written from the main thread, consumed on the render thread.
+    private let inputLock = NSLock()
+    private var pendingFireCount = 0
+    private var joystickVelocity = simd_float2()
+    private var useJoystickVelocity = false
+
+    init(logic: GameLogic, audio: AudioEngine, events: GameEvents) throws {
+        self.logic = logic
+        self.audio = audio
+        self.events = events
+
+        ship = try Ship()
+
+        let room = try GameAssets.loadOBJ(named: "room")
+        let roomMaterial = GameAssets.unlitMaterial(imageNamed: "room7.jpg")
+        roomMaterial.isDoubleSided = true   // viewed from inside
+        room.enumerateHierarchy { child, _ in
+            child.geometry?.materials = [roomMaterial]
+        }
+        room.simdScale = simd_float3(Self.roomHalf, Self.roomSize * 0.125, Self.roomHalf)
+        room.simdPosition = simd_float3(0, -Self.roomSize * (0.5 - 0.125), 0)
+
+        let barMaterial = GameAssets.unlitMaterial(imageNamed: "building3.jpg")
+        bars = (0..<GameLogic.spectrumBinCount).map { SpectrumBar(index: $0, material: barMaterial) }
+
+        chordGroups = ["c4.png", "c5.png", "c6.png"].map {
+            ChordParticles(count: Self.chordsPerGroup, imageNamed: $0)
+        }
+        // Indexed by GameLogic.BonusSlot.rawValue (the original's bonusTextures order).
+        bonuses = ["threerings.png", "b1knew.png", "b5knew.png", "b40knew.png", "bship.png", "b25knew.png"]
+            .map { BonusParticles(imageNamed: $0) }
+
+        // Pickup spots above selected bars; slot 5 mixes bin 7's x with bin 5's y/z,
+        // exactly as in the original.
+        let base = bars.map(\.basePosition)
+        let zOffset = Self.spectrumTop / 5
+        let edge = Self.roomEdge
+        bonusPositions = [
+            simd_float3(base[0].x, base[0].y + edge, base[0].z - zOffset),
+            simd_float3(base[12].x, base[12].y + edge, base[12].z + zOffset),
+            simd_float3(base[5].x, base[5].y + edge, base[5].z - zOffset),
+            simd_float3(base[10].x, base[10].y + edge, base[10].z - zOffset),
+            simd_float3(base[2].x, base[2].y + edge, base[2].z + zOffset),
+            simd_float3(base[7].x, base[5].y + edge, base[5].z + zOffset),
+        ]
+
+        super.init()
+
+        let root = scene.rootNode
+        root.addChildNode(room)
+        bars.forEach { root.addChildNode($0.node) }
+        root.addChildNode(ship.node)
+        ship.rings.forEach(root.addChildNode)
+        root.addChildNode(bullets.containerNode)
+        chordGroups.forEach { root.addChildNode($0.containerNode) }
+        bonuses.forEach { root.addChildNode($0.containerNode) }
+
+        // The two directional lights objship adds; only the ship and rings are lit
+        // (room, bars and sprites are unlit).
+        for direction in [simd_float3(0.1, 1, 0.1), simd_float3(-0.1, -0.1, -0.1)] {
+            let light = SCNLight()
+            light.type = .directional
+            light.intensity = 2000
+            let lightNode = SCNNode()
+            lightNode.light = light
+            lightNode.simdOrientation = simd_quatf(from: simd_float3(0, 0, -1),
+                                                   to: simd_normalize(direction))
+            root.addChildNode(lightNode)
+        }
+
+        // ChaseCamera(offset (0, 0.6, 3), slerp 0.05) port.
+        let camera = SCNCamera()
+        camera.fieldOfView = 45
+        camera.zFar = 2000
+        cameraNode.camera = camera
+        root.addChildNode(cameraNode)
+        updateChaseCamera()
+    }
+
+    // Resets frame timing (after the app returns to the foreground).
+    func resetClock() {
+        lastTime = nil
+    }
+
+    // MARK: - Input (main thread)
+
+    func setJoystick(_ velocity: simd_float2) {
+        inputLock.withLock {
+            joystickVelocity = velocity
+            useJoystickVelocity = true
+        }
+    }
+
+    func releaseJoystick() {
+        inputLock.withLock { useJoystickVelocity = false }
+    }
+
+    // setTouch() in the original: queue one shot for the next frame.
+    func fireOnce() {
+        inputLock.withLock { pendingFireCount += 1 }
+    }
+
+    // setTouch(float) in the original: tap-to-autofire.
+    func autoFire(duration: Float) {
+        logic.autoFire(duration: duration)
+    }
+
+    // MARK: - Frame loop (render thread)
+
+    func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+        let deltaTime = Float(lastTime.map { time - $0 } ?? 0)
+        lastTime = time
+
+        if logic.state == .paused {
+            exitGame()
+            return
+        }
+        if logic.state == .finished {
+            handleGameOver(deltaTime)
+            updateChaseCamera()
+            return
+        }
+
+        logic.tick(deltaTime: deltaTime)
+        updateDisplayList(deltaTime)
+        checkShipHitBonus()
+        checkBulletHitChords()
+        checkChordHitShip()
+        logic.publishStatus(deltaTime: deltaTime)
+
+        if logic.songCheckDue(deltaTime: deltaTime), audio.hasFinishedPlaying {
+            logic.songEnded()
+        }
+        updateChaseCamera()
+    }
+
+    private func updateDisplayList(_ deltaTime: Float) {
+        let (joystick, usingJoystick, fires) = inputLock.withLock {
+            defer { pendingFireCount = 0 }
+            return (joystickVelocity, useJoystickVelocity, pendingFireCount)
+        }
+
+        if usingJoystick {
+            ship.velocity.x = joystick.x * 2
+            ship.velocity.y = joystick.y
+        } else {
+            ship.velocity *= 0.95
+        }
+
+        if logic.state == .running {
+            ship.update(deltaTime: deltaTime, isRingOn: logic.isRingOn)
+            applyShipFlash(logic.isShipHit && logic.isShipFlashOn)
+        }
+
+        for _ in 0..<fires { fire() }
+        if logic.consumeAutoFire() { fire() }
+
+        updateSpectrum(deltaTime)
+        applySpectrumToBars()
+
+        if let slot = logic.consumePendingBonusSlot() {
+            bonuses[slot.rawValue].spawn(at: bonusPositions[logic.bonusLocation(of: slot)])
+        }
+
+        bullets.update(deltaTime: deltaTime)
+        chordGroups.forEach { $0.update(deltaTime: deltaTime) }
+        bonuses.forEach { $0.update(deltaTime: deltaTime) }
+    }
+
+    private func applyShipFlash(_ flash: Bool) {
+        guard flash != shipFlashApplied else { return }
+        shipFlashApplied = flash
+        ship.setFlash(flash)
+    }
+
+    private func applySpectrumToBars() {
+        guard logic.isSpectrumReady else { return }
+        for sp in GameLogic.spectrumSkipCount..<GameLogic.spectrumSize {
+            bars[sp - GameLogic.spectrumSkipCount].setValue(logic.spectrumValues[sp])
+        }
+    }
+
+    private func updateSpectrum(_ deltaTime: Float) {
+        guard logic.spectrumUpdateDue(deltaTime: deltaTime) else { return }
+        logic.updateSpectrum(fft: audio.fftMagnitudes(), deltaTime: deltaTime)
+        for bin in 0..<GameLogic.spectrumBinCount where logic.consumeChordRelease(bin: bin) {
+            spawnChord(bin: bin)
+        }
+    }
+
+    private func spawnChord(bin: Int) {
+        let group = logic.rollChordGroup()
+        guard group >= 0 else { return }
+
+        let spawn = bars[bin].basePosition + simd_float3(0, Self.spectrumTop, 0)
+        // Try the rolled chord type first, then the others in rotation.
+        for j in 0..<Self.groupCount {
+            if chordGroups[(group + j) % Self.groupCount]
+                .spawn(at: spawn, toward: ship.node.simdPosition) {
+                return
+            }
+        }
+    }
+
+    // MARK: - Collisions
+
+    private func withinManhattanDistance(_ a: simd_float3, _ b: simd_float3, _ distance: Float) -> Bool {
+        let d = simd_abs(a - b)
+        return d.x <= distance && d.y <= distance && d.z <= distance
+    }
+
+    private func checkShipHitBonus() {
+        let shipPosition = ship.node.simdPosition
+        for (slotIndex, bonus) in bonuses.enumerated() {
+            guard let slot = GameLogic.BonusSlot(rawValue: slotIndex) else { continue }
+            for i in bonus.nodes.indices where bonus.isAlive[i] {
+                if withinManhattanDistance(bonus.positions[i], shipPosition, Self.collisionDistance) {
+                    logic.bonusCollected(slot)
+                    bonus.deactivate(i)
+                }
+            }
+        }
+    }
+
+    private func checkBulletHitChords() {
+        for bi in bullets.nodes.indices where bullets.isAlive[bi] {
+            let bulletPosition = bullets.positions[bi]
+            var bulletHit = false
+
+            chordSearch: for i in 0..<Self.chordsPerGroup {
+                for chords in chordGroups where chords.states[i] == .alive && chords.isAlive[i] {
+                    if withinManhattanDistance(bulletPosition, chords.positions[i], Self.collisionDistance) {
+                        chords.explode(i)
+                        bulletHit = true
+                        logic.bulletHitChord()
+                        break chordSearch
+                    }
+                }
+            }
+
+            if bulletHit {
+                bullets.deactivate(bi)
+            }
+        }
+    }
+
+    private func checkChordHitShip() {
+        let shipPosition = ship.node.simdPosition
+        for i in 0..<Self.chordsPerGroup {
+            for chords in chordGroups where chords.states[i] == .alive && chords.isAlive[i] {
+                if withinManhattanDistance(shipPosition, chords.positions[i], Self.collisionDistance) {
+                    chords.explode(i)
+                    logic.chordHitShip()
+                }
+            }
+        }
+    }
+
+    // MARK: - Firing
+
+    private func fire() {
+        guard logic.state == .running else { return }
+
+        if logic.isRingOn {
+            // Ring weapon: a fast shot at every chord ahead of the ship's z motion.
+            let shipPosition = ship.node.simdPosition
+            for i in 0..<Self.chordsPerGroup {
+                for chords in chordGroups where chords.states[i] == .alive && chords.isAlive[i] {
+                    let dz = chords.positions[i].z - shipPosition.z
+                    let firesStraight = (ship.zDirection < 0 && dz < 0) || (ship.zDirection > 0 && dz > 0)
+                    if firesStraight {
+                        let direction = simd_normalize(chords.positions[i] - shipPosition)
+                        bullets.fire(direction: direction, from: shipPosition, veryFast: true)
+                    }
+                }
+            }
+        } else {
+            // Single shot along the ship's horizontal heading.
+            var direction = ship.direction
+            direction.y = 0
+            bullets.fire(direction: simd_normalize(direction),
+                         from: ship.node.simdPosition,
+                         veryFast: false)
+        }
+    }
+
+    // MARK: - Chase camera
+
+    private func updateChaseCamera() {
+        let yaw = ship.node.eulerAngles.y
+        let offset = simd_float3(3 * sin(yaw), 0.6, 3 * cos(yaw))   // (0, 0.6, 3) rotated by yaw
+        cameraNode.simdPosition = ship.node.simdPosition + offset
+        cameraYaw += 0.05 * (yaw - cameraYaw)
+        cameraNode.eulerAngles = SCNVector3(0, cameraYaw, 0)
+    }
+
+    // MARK: - Game over
+
+    private func handleGameOver(_ deltaTime: Float) {
+        if !gameOverSceneCleaned {
+            gameOverSceneCleaned = true
+            ship.node.removeFromParentNode()
+            ship.rings.forEach { $0.removeFromParentNode() }
+            bullets.containerNode.removeFromParentNode()
+            bonuses.forEach { $0.containerNode.removeFromParentNode() }
+        }
+
+        // The spectrum keeps dancing behind the game-over screen.
+        updateSpectrum(deltaTime)
+        applySpectrumToBars()
+        chordGroups.forEach { $0.update(deltaTime: deltaTime) }
+
+        logic.tickGameOver(deltaTime: deltaTime)
+
+        if logic.consumeExitRequest() {
+            exitGame()
+        }
+    }
+
+    private func exitGame() {
+        audio.stop()
+        events?.gameOverTime()
+    }
+}

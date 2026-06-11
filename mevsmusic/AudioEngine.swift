@@ -13,10 +13,11 @@ final class AudioEngine {
 
     private static let fftSize = 1024
     private static let binCount = fftSize / 2
-    // vDSP's real FFT returns 2× the mathematical DFT and the Hann window halves
-    // the peak, so 1/1024 lands a full-scale sine near 0.5 like BASS. This is the
-    // one normalization constant to tune until the game feel matches Android.
-    private static let magnitudeScale: Float = 1.0 / 1024
+    // BASS-equivalent normalization, calibrated empirically against GameLogic's
+    // chord-release rules over both demo tracks: 1/256 yields ~3.4 releases/s
+    // with the spectrum bars still dancing (22-29% of updates have a pegged bar),
+    // matching the busy Android game. Smaller values starve the game of enemies.
+    private static let magnitudeScale: Float = 1.0 / 256
 
     let sampleRate: Int
 
@@ -63,9 +64,13 @@ final class AudioEngine {
 
     func pause() {
         player.pause()
+        engine.pause()
     }
 
     func resume() {
+        if !engine.isRunning {
+            try? engine.start()
+        }
         player.play()
     }
 

@@ -35,6 +35,7 @@ The Android original is the reference implementation: `/Users/tamir/Desktop/GitH
 - The test targets are empty template stubs; only run tests when explicitly asked.
 
 ## Don'ts
+- Don't port the Android engine sources (`r/`, `net/rbgrn/`) or the BASS wrapper to Swift. SceneKit replaces the engine and AVFoundation replaces BASS. Read engine files only as behavioral reference (constants, camera feel, particle timing) — never translate engine classes like `Number3D`, `BaseObject3D`, `ObjParser`, or `RajawaliRenderer`.
 - Don't add dependencies (SwiftPM packages, CocoaPods) without asking first.
 - Don't use deprecated APIs when modern alternatives exist.
 - Don't change code signing or team settings.
