@@ -1,17 +1,24 @@
 import UIKit
 import SceneKit
+import CoreMotion
 
 // FlyingActivity.java port: the UIKit shell around the SceneKit game — HUD,
-// joystick + fire input, the staged game-over overlay, lifecycle and audio.
+// joystick + fire + accelerometer input, the staged game-over overlay,
+// lifecycle and audio. Presented full screen by MenuViewController.
 class GameViewController: UIViewController {
 
     private static let joystickSize: CGFloat = 180          // JOYSTICK_SIZE
-    private static let demoTrack = "Sunset"                 // DEMO_TRACK1
     private static let hudAlpha: CGFloat = 0x90 / 255.0
     private static let hudBlue = UIColor(red: 0, green: 0xbf / 255.0, blue: 1, alpha: hudAlpha)
     private static let hudCyan = UIColor(red: 0, green: 1, blue: 1, alpha: hudAlpha)
     private static let gameOverCyan = UIColor(red: 0, green: 1, blue: 1, alpha: 1)
     private static let gameOverGreen = UIColor(red: 0x37 / 255.0, green: 1, blue: 0x37 / 255.0, alpha: 1)
+
+    private let track: Track
+    private let useAccelerometer: Bool
+    private let motionManager = CMMotionManager()
+    private var gravity = simd_float3()
+    private var hasStarted = false
 
     private var audio: AudioEngine?
     private var logic: GameLogic?
@@ -34,6 +41,21 @@ class GameViewController: UIViewController {
     // Text sizes follow the Android screen-width fractions.
     private var screenWidth: CGFloat { max(view.bounds.width, view.bounds.height) }
 
+    init(track: Track, useAccelerometer: Bool) {
+        self.track = track
+        self.useAccelerometer = useAccelerometer
+        super.init(nibName: nil, bundle: nil)
+        modalPresentationStyle = .fullScreen
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func loadView() {
+        view = SCNView(frame: UIScreen.main.bounds)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         HighScore.load()
@@ -44,8 +66,14 @@ class GameViewController: UIViewController {
                            name: UIApplication.didEnterBackgroundNotification, object: nil)
         center.addObserver(self, selector: #selector(appWillEnterForeground),
                            name: UIApplication.willEnterForegroundNotification, object: nil)
+    }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !hasStarted else { return }
+        hasStarted = true
         startGame()
+        startAccelerometerIfNeeded()
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
@@ -58,11 +86,12 @@ class GameViewController: UIViewController {
         guard let scnView else { return }
         showLoader()
         do {
-            let audio = try AudioEngine(fileNamed: Self.demoTrack)
+            let audio = try AudioEngine(contentsOf: track.url)
             let logic = GameLogic(events: self,
-                                  title: "\(Self.demoTrack).mp3",
+                                  title: track.title,
                                   sampleRate: audio.sampleRate)
-            let renderer = try GameRenderer(logic: logic, audio: audio, events: self)
+            let renderer = try GameRenderer(logic: logic, audio: audio, events: self,
+                                            useAccelerometer: useAccelerometer)
             self.audio = audio
             self.logic = logic
             self.gameRenderer = renderer
@@ -78,31 +107,51 @@ class GameViewController: UIViewController {
             hideLoader()
         } catch {
             loadingView.isHidden = true
-            countdownLabel.isHidden = false
-            countdownLabel.text = " "
-            scoreLabel.isHidden = false
-            scoreLabel.text = "Failed to start: \(error)"
+            let alert = UIAlertController(title: "Unable to play this track",
+                                          message: error.localizedDescription,
+                                          preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+                self?.dismiss(animated: true)
+            })
+            present(alert, animated: true)
         }
     }
 
-    // The original finished the activity back to the song menu; with no menu
-    // ported yet, a fresh game on the same track starts instead.
-    private func restartGame() {
+    // Activity.finish() port: tear the game down and return to the song menu.
+    private func exitToMenu() {
+        motionManager.stopAccelerometerUpdates()
         scnView?.isPlaying = false
         scnView?.delegate = nil
         audio?.stop()
         audio = nil
         logic = nil
         gameRenderer = nil
+        dismiss(animated: true)
+    }
 
-        gameOverStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        gameOverStack.isHidden = true
-        shipsRow.isHidden = true
-        scoreLabel.isHidden = true
-        scoreLabel.text = nil
-        countdownLabel.text = nil
-
-        startGame()
+    // onSensorChanged port: low-pass gravity filter (ALPHA 0.15, SENSITIVITY 10),
+    // converted to Android's m/s^2 units; axes swizzled per landscape orientation.
+    private func startAccelerometerIfNeeded() {
+        guard useAccelerometer, motionManager.isAccelerometerAvailable else { return }
+        motionManager.accelerometerUpdateInterval = 1.0 / 60
+        motionManager.startAccelerometerUpdates(to: .main) { [weak self] data, _ in
+            guard let self, let acceleration = data?.acceleration else { return }
+            let value = simd_float3(Float(acceleration.x),
+                                    Float(acceleration.y),
+                                    Float(acceleration.z)) * 9.81
+            self.gravity = value * 0.15 + self.gravity * 0.85
+            let weighted = self.gravity * 10
+            let isLandscapeRight = self.view.window?.windowScene?.interfaceOrientation == .landscapeRight
+            if isLandscapeRight {   // ROTATION_90 mapping
+                self.gameRenderer?.setAccelerometerValues(x: value.y + weighted.y,
+                                                          y: value.x - weighted.x,
+                                                          z: value.z - weighted.z)
+            } else {                // ROTATION_270 mapping
+                self.gameRenderer?.setAccelerometerValues(x: value.y - weighted.y,
+                                                          y: value.x + weighted.x,
+                                                          z: value.z - weighted.z)
+            }
+        }
     }
 
     @objc private func appDidEnterBackground() {
@@ -325,6 +374,6 @@ extension GameViewController: GameEvents {
     }
 
     nonisolated func gameOverTime() {
-        Task { @MainActor in self.restartGame() }
+        Task { @MainActor in self.exitToMenu() }
     }
 }

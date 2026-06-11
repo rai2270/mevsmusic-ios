@@ -31,10 +31,14 @@ final class AudioEngine {
     private var latestSamples = [Float](repeating: 0, count: AudioEngine.fftSize)
     private var isFinished = false
 
-    init(fileNamed name: String) throws {
+    convenience init(fileNamed name: String) throws {
         guard let url = Bundle.main.url(forResource: name, withExtension: "mp3") else {
             throw Failure.fileNotFound(name)
         }
+        try self.init(contentsOf: url)
+    }
+
+    init(contentsOf url: URL) throws {
         dft = try vDSP.DiscreteFourierTransform(count: Self.fftSize, direction: .forward,
                                                 transformType: .complexReal, ofType: Float.self)
         file = try AVAudioFile(forReading: url)

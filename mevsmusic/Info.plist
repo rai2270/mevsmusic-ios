@@ -15,8 +15,6 @@
 					<string>Default Configuration</string>
 					<key>UISceneDelegateClassName</key>
 					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
 				</dict>
 			</array>
 		</dict>
@@ -26,5 +24,7 @@
 		<key>UIColorName</key>
 		<string>Black</string>
 	</dict>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Lists your music library so you can fly against your own songs.</string>
 </dict>
 </plist>

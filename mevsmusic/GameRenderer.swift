@@ -44,11 +44,15 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     private var pendingFireCount = 0
     private var joystickVelocity = simd_float2()
     private var useJoystickVelocity = false
+    private let useAccelerometer: Bool
+    private var accelerometerStart: simd_float3?
+    private var accelerometerVelocity: simd_float2?
 
-    init(logic: GameLogic, audio: AudioEngine, events: GameEvents) throws {
+    init(logic: GameLogic, audio: AudioEngine, events: GameEvents, useAccelerometer: Bool = false) throws {
         self.logic = logic
         self.audio = audio
         self.events = events
+        self.useAccelerometer = useAccelerometer
 
         ship = try Ship()
 
@@ -146,6 +150,20 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         logic.autoFire(duration: duration)
     }
 
+    // setAccelerometerValues port: the first reading is the neutral posture,
+    // later readings steer relative to it (vVel = ((x*2, y) - start) * 0.02).
+    func setAccelerometerValues(x: Float, y: Float, z: Float) {
+        guard logic.state == .running else { return }
+        if accelerometerStart == nil {
+            accelerometerStart = simd_float3(x, y, z)
+        }
+        guard useAccelerometer, let start = accelerometerStart else { return }
+        inputLock.withLock {
+            guard !useJoystickVelocity else { return }
+            accelerometerVelocity = simd_float2((x * 2 - start.x) * 0.02, (y - start.y) * 0.02)
+        }
+    }
+
     // MARK: - Frame loop (render thread)
 
     func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
@@ -176,14 +194,18 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     }
 
     private func updateDisplayList(_ deltaTime: Float) {
-        let (joystick, usingJoystick, fires) = inputLock.withLock {
+        let (joystick, usingJoystick, accelerometer, fires) = inputLock.withLock {
             defer { pendingFireCount = 0 }
-            return (joystickVelocity, useJoystickVelocity, pendingFireCount)
+            return (joystickVelocity, useJoystickVelocity, accelerometerVelocity, pendingFireCount)
         }
 
         if usingJoystick {
             ship.velocity.x = joystick.x * 2
             ship.velocity.y = joystick.y
+        } else if useAccelerometer {
+            if let accelerometer {
+                ship.velocity = accelerometer
+            }
         } else {
             ship.velocity *= 0.95
         }
