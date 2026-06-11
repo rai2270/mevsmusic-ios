@@ -1,4 +1,5 @@
 import SceneKit
+import SceneKit.ModelIO
 
 // FlyingRenderer.java port: owns the SceneKit scene and the frame loop. All game
 // rules live in GameLogic; this class feeds it inputs (time, FFT data, collisions)
@@ -61,12 +62,12 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         roomMaterial.isDoubleSided = true   // viewed from inside
         room.enumerateHierarchy { child, _ in
             child.geometry?.materials = [roomMaterial]
+            child.castsShadow = false       // the enclosure must not shadow its interior
         }
         room.simdScale = simd_float3(Self.roomHalf, Self.roomSize * 0.125, Self.roomHalf)
         room.simdPosition = simd_float3(0, -Self.roomSize * (0.5 - 0.125), 0)
 
-        let barMaterial = GameAssets.unlitMaterial(imageNamed: "building3.jpg")
-        bars = (0..<GameLogic.spectrumBinCount).map { SpectrumBar(index: $0, material: barMaterial) }
+        bars = (0..<GameLogic.spectrumBinCount).map { SpectrumBar(index: $0, imageNamed: "building3.jpg") }
 
         chordGroups = ["c4.png", "c5.png", "c6.png"].map {
             ChordParticles(count: Self.chordsPerGroup, imageNamed: $0)
@@ -117,9 +118,110 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         let camera = SCNCamera()
         camera.fieldOfView = 45
         camera.zFar = 2000
+        configureModernCamera(camera)
         cameraNode.camera = camera
         root.addChildNode(cameraNode)
+
+        installLightingEnvironment()
+        installSunlight(in: root)
+        installFloorEffects(in: root)
+        installEngineExhaust()
+
         updateChaseCamera()
+    }
+
+    // MARK: - Modern rendering (feature/high_quality)
+    // Everything below is presentation only: positions, timings and collisions
+    // are untouched, so gameplay stays identical to the faithful port.
+
+    private func configureModernCamera(_ camera: SCNCamera) {
+        camera.wantsHDR = true
+        camera.wantsExposureAdaptation = false   // stable music lighting, no pumping
+        camera.bloomThreshold = 1.0              // only emissive surfaces bloom
+        camera.bloomIntensity = 0.7
+        camera.bloomBlurRadius = 10
+        camera.vignettingPower = 0.7
+        camera.vignettingIntensity = 0.5
+        camera.saturation = 1.08
+        camera.contrast = 1.04
+    }
+
+    // Procedural sky cube as image-based lighting for the PBR ship and rings.
+    private func installLightingEnvironment() {
+        let sky = MDLSkyCubeTexture(name: nil,
+                                    channelEncoding: .uInt8,
+                                    textureDimensions: vector_int2(128, 128),
+                                    turbidity: 0.28,
+                                    sunElevation: 0.65,
+                                    upperAtmosphereScattering: 0.2,
+                                    groundAlbedo: 0.6)
+        scene.lightingEnvironment.contents = sky.imageFromTexture()?.takeUnretainedValue()
+        scene.lightingEnvironment.intensity = 1.2
+    }
+
+    // Key light with soft shadows; the ship and the dancing bars cast onto the floor.
+    private func installSunlight(in root: SCNNode) {
+        let sun = SCNLight()
+        sun.type = .directional
+        sun.intensity = 700
+        sun.castsShadow = true
+        sun.shadowMapSize = CGSize(width: 2048, height: 2048)
+        sun.shadowSampleCount = 16
+        sun.shadowRadius = 8
+        sun.shadowColor = UIColor(white: 0, alpha: 0.55)
+        let node = SCNNode()
+        node.light = sun
+        node.eulerAngles = SCNVector3(-Float.pi / 3, Float.pi / 7, 0)
+        root.addChildNode(node)
+    }
+
+    // A shadow catcher and subtle real-time reflections over the room's floor art.
+    private func installFloorEffects(in root: SCNNode) {
+        let catcherPlane = SCNPlane(width: CGFloat(Self.roomSize), height: CGFloat(Self.roomSize))
+        let catcherMaterial = SCNMaterial()
+        catcherMaterial.lightingModel = .shadowOnly
+        catcherPlane.materials = [catcherMaterial]
+        let catcher = SCNNode(geometry: catcherPlane)
+        catcher.eulerAngles.x = -.pi / 2
+        catcher.simdPosition = simd_float3(0, -Self.roomSize / 2 + 0.05, 0)
+        catcher.castsShadow = false
+        root.addChildNode(catcher)
+
+        let floor = SCNFloor()
+        floor.reflectivity = 0.25
+        floor.reflectionFalloffEnd = 50
+        let floorMaterial = SCNMaterial()
+        floorMaterial.lightingModel = .constant
+        floorMaterial.diffuse.contents = UIColor(white: 0, alpha: 0.02)
+        floorMaterial.writesToDepthBuffer = false
+        floor.materials = [floorMaterial]
+        let floorNode = SCNNode(geometry: floor)
+        floorNode.simdPosition = simd_float3(0, -Self.roomSize / 2 + 0.02, 0)
+        floorNode.castsShadow = false
+        root.addChildNode(floorNode)
+    }
+
+    // Additive engine trail behind the ship (world-space, so it streaks).
+    private func installEngineExhaust() {
+        let exhaust = SCNParticleSystem()
+        exhaust.emitterShape = SCNSphere(radius: 0.04)
+        exhaust.birthRate = 70
+        exhaust.particleLifeSpan = 0.22
+        exhaust.particleLifeSpanVariation = 0.06
+        exhaust.particleVelocity = 10
+        exhaust.particleVelocityVariation = 2.5
+        exhaust.emittingDirection = SCNVector3(0, 0, 1)   // ship-local backward
+        exhaust.spreadingAngle = 5
+        exhaust.particleSize = 0.22
+        exhaust.particleSizeVariation = 0.08
+        exhaust.particleImage = UIImage(named: "flare.png")
+        exhaust.particleColor = UIColor(red: 0.35, green: 0.6, blue: 1, alpha: 0.5)
+        exhaust.blendMode = .additive
+        exhaust.isLightingEnabled = false
+        let mount = SCNNode()
+        mount.position = SCNVector3(0, 0.05, 1.3)
+        mount.addParticleSystem(exhaust)
+        ship.node.addChildNode(mount)
     }
 
     // Resets frame timing (after the app returns to the foreground).
