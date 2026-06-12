@@ -64,6 +64,17 @@ final class Ship {
             let ring = try GameAssets.loadOBJ(named: "ring005")
             ring.simdScale = simd_float3(repeating: 0.02)
             ring.simdPosition = GameRenderer.inactivePosition
+            ring.enumerateHierarchy { child, _ in
+                child.castsShadow = false
+                for material in child.geometry?.materials ?? [] {
+                    // Energy rings: emissive so they feed the HDR bloom pass.
+                    material.lightingModel = .physicallyBased
+                    material.metalness.contents = 0.9
+                    material.roughness.contents = 0.25
+                    material.emission.contents = UIColor(red: 0.5, green: 0.9, blue: 1, alpha: 1)
+                    material.emission.intensity = 1.6
+                }
+            }
             return ring
         }
 
@@ -72,6 +83,12 @@ final class Ship {
             collected.append(contentsOf: child.geometry?.materials ?? [])
         }
         materials = collected
+        // The MTL's plain colors, upgraded to metal under image-based lighting.
+        materials.forEach {
+            $0.lightingModel = .physicallyBased
+            $0.metalness.contents = 0.85
+            $0.roughness.contents = 0.35
+        }
     }
 
     // setPosition(fTimeLapsed, ringIsON, shieldIsON) port.
@@ -131,11 +148,18 @@ final class SpectrumBar {
 
     let node: SCNNode
     let basePosition: simd_float3
+    private let material: SCNMaterial
 
-    init(index: Int, material: SCNMaterial) {
+    init(index: Int, imageNamed imageName: String) {
         // Android display x mirrored into collision space.
         let x = Float(index) * Self.spacing - Float(GameLogic.spectrumBinCount) / 2 * Self.spacing
         basePosition = simd_float3(x, -GameRenderer.roomSize / 2 + 0.5, 0)
+
+        // Per-bar material: the emission tracks this bar's level, so peaking
+        // bars glow into the HDR bloom pass.
+        material = GameAssets.unlitMaterial(imageNamed: imageName)
+        material.emission.contents = material.diffuse.contents
+        material.emission.intensity = 0
 
         let size = CGFloat(Self.size)
         let box = SCNBox(width: size, height: size, length: size, chamferRadius: 0)
@@ -151,5 +175,6 @@ final class SpectrumBar {
         node.simdPosition = simd_float3(basePosition.x,
                                         basePosition.y + Self.size * yScale / 2,
                                         basePosition.z)
+        material.emission.intensity = CGFloat(value) * 0.75   // 0...1.5, blooms at the peak
     }
 }

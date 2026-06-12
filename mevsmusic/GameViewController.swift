@@ -100,7 +100,9 @@ class GameViewController: UIViewController {
             scnView.pointOfView = renderer.cameraNode
             scnView.delegate = renderer
             scnView.backgroundColor = .black
-            scnView.preferredFramesPerSecond = 60   // setFrameRate(60)
+            scnView.antialiasingMode = .multisampling4X
+            // Stays at 60: ship yaw and velocity decay are per-frame, as on Android.
+            scnView.preferredFramesPerSecond = 60
             scnView.isPlaying = true
 
             try audio.play()
