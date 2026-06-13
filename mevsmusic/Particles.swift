@@ -14,7 +14,8 @@ class SpriteParticles {
 
     private let tileRows: Int
 
-    init(count: Int, imageNamed imageName: String, size: CGFloat, tileRows: Int = 1) {
+    init(count: Int, imageNamed imageName: String, size: CGFloat, tileRows: Int = 1,
+         blendMode: SCNBlendMode = .alpha, emissionIntensity: CGFloat = 0) {
         self.tileRows = tileRows
         isAlive = [Bool](repeating: false, count: count)
         positions = [simd_float3](repeating: GameRenderer.inactivePosition, count: count)
@@ -22,19 +23,29 @@ class SpriteParticles {
             let material = SCNMaterial()
             material.lightingModel = .constant
             material.diffuse.contents = UIImage(named: imageName)
+            material.diffuse.mipFilter = .linear    // trilinear: no shimmer at distance
             material.isDoubleSided = true
             material.writesToDepthBuffer = false
+            material.blendMode = blendMode
+            if emissionIntensity > 0 {
+                // Same image as emission so the sprite feeds the HDR bloom pass.
+                material.emission.contents = material.diffuse.contents
+                material.emission.intensity = emissionIntensity
+            }
             if tileRows > 1 {
                 let scale = 1 / Float(tileRows)
                 material.diffuse.contentsTransform = SCNMatrix4MakeScale(scale, scale, 1)
+                material.emission.contentsTransform = material.diffuse.contentsTransform
             }
             let plane = SCNPlane(width: size, height: size)
             plane.materials = [material]
             let node = SCNNode(geometry: plane)
             node.constraints = [SCNBillboardConstraint()]
             node.simdPosition = GameRenderer.inactivePosition
+            node.castsShadow = false
             return node
         }
+        containerNode.castsShadow = false
         nodes.forEach(containerNode.addChildNode)
     }
 
@@ -46,6 +57,7 @@ class SpriteParticles {
         let translation = SCNMatrix4MakeTranslation(Float(frame % tileRows) * scale,
                                                     Float(frame / tileRows) * scale, 0)
         material.diffuse.contentsTransform = SCNMatrix4Mult(SCNMatrix4MakeScale(scale, scale, 1), translation)
+        material.emission.contentsTransform = material.diffuse.contentsTransform
     }
 
     func deactivate(_ index: Int) {
@@ -79,7 +91,8 @@ final class BulletParticles: SpriteParticles {
     init(count: Int) {
         velocities = [simd_float3](repeating: .zero, count: count)
         speeds = [Float](repeating: Self.speed, count: count)
-        super.init(count: count, imageNamed: "flare.png", size: 0.6)
+        super.init(count: count, imageNamed: "flare.png", size: 0.6,
+                   blendMode: .add, emissionIntensity: 1.8)
     }
 
     func fire(direction: simd_float3, from position: simd_float3, veryFast: Bool) {
@@ -145,7 +158,8 @@ final class ChordParticles: SpriteParticles {
         bornFrames = [Int](repeating: 0, count: count)
         aliveFrames = (0..<count).map { _ in Int.random(in: 0..<Self.aliveFrameCount) }
         explodeFrames = [Int](repeating: 0, count: count)
-        super.init(count: count, imageNamed: imageName, size: 1.8, tileRows: 8)
+        super.init(count: count, imageNamed: imageName, size: 1.8, tileRows: 8,
+                   emissionIntensity: 0.5)
     }
 
     func spawn(at position: simd_float3, toward shipPosition: simd_float3) -> Bool {
@@ -242,7 +256,8 @@ final class BonusParticles: SpriteParticles {
 
     init(imageNamed imageName: String) {
         frames = [Int.random(in: 0..<Self.totalFrames)]
-        super.init(count: 1, imageNamed: imageName, size: 1.8, tileRows: 8)
+        super.init(count: 1, imageNamed: imageName, size: 1.8, tileRows: 8,
+                   emissionIntensity: 0.7)
     }
 
     func spawn(at position: simd_float3) {
