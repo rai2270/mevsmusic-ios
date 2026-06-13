@@ -24,7 +24,5 @@
 		<key>UIColorName</key>
 		<string>LaunchBlack</string>
 	</dict>
-	<key>NSAppleMusicUsageDescription</key>
-	<string>Lists your music library so you can fly against your own songs.</string>
 </dict>
 </plist>
