@@ -16,3 +16,5 @@ DerivedData/
 # Swift Package Manager
 .swiftpm/
 .build/
+
+.claude/settings.local.json
