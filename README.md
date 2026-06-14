@@ -43,6 +43,8 @@ The rules layer crossed over almost line for line: scoring, lives, the bonus spa
 
 The audio path mirrors BASS's semantics: a tap on the player keeps the most recent 1024 samples, and the game polls a Hann-windowed FFT on a 20 ms timer, folding 512 magnitude bins into the 26 frequency bands the game was tuned around (the top 14 are the bars you see). The one number BASS didn't bring along — its magnitude scale — was recovered empirically: an offline harness decoded both demo tracks through the real game rules and swept normalization constants until the chord-spawn rate matched the busy feel of the Android original.
 
+📖 **Want the full story?** [How MeVsMusic was ported from Android to iOS](docs/PORTING.md) is a plain-language walkthrough of every step — replacing the 3D engine and audio library, keeping the game rules pixel-faithful, and how each piece was verified.
+
 ## Building
 
 Open `mevsmusic.xcodeproj`, select the **mevsmusic** scheme, and run. That's it — no packages, no pods.
