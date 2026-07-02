@@ -43,6 +43,11 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     private var shakeClock: Float = 0
     private var wasShipHit = false
 
+    // Demo autopilot for screenshots/trailers. Only reachable by launching with
+    // the DEMO environment variable (Xcode scheme or simctl) — never in normal use.
+    private let demoMode = ProcessInfo.processInfo.environment["DEMO"] != nil
+    private var demoFireTimer: Float = 0
+
     // Input written from the main thread, consumed on the render thread.
     private let inputLock = NSLock()
     private var pendingFireCount = 0
@@ -393,7 +398,9 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
             return (joystickVelocity, useJoystickVelocity, accelerometerVelocity, pendingFireCount)
         }
 
-        if usingJoystick {
+        if demoMode {
+            if logic.state == .running { demoSteer(deltaTime) }
+        } else if usingJoystick {
             ship.velocity.x = joystick.x * 2
             ship.velocity.y = joystick.y
         } else if useAccelerometer {
@@ -426,6 +433,35 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         bullets.update(deltaTime: deltaTime)
         chordGroups.forEach { $0.update(deltaTime: deltaTime) }
         bonuses.forEach { $0.update(deltaTime: deltaTime) }
+    }
+
+    // Demo autopilot: chase the nearest live pickup (or cruise through the bar
+    // rack), firing bursts so captures catch bullets, explosions and bonus grabs.
+    private func demoSteer(_ deltaTime: Float) {
+        var target = simd_float3(0, -95, -20)
+        var bestDistance = Float.greatestFiniteMagnitude
+        for bonus in bonuses {
+            for i in bonus.nodes.indices where bonus.isAlive[i] {
+                let distance = simd_length(bonus.positions[i] - ship.node.simdPosition)
+                if distance < bestDistance {
+                    bestDistance = distance
+                    target = bonus.positions[i]
+                }
+            }
+        }
+        let to = target - ship.node.simdPosition
+        // Forward is (-sin(yaw), 0, -cos(yaw)); aim it along `to`.
+        let desiredYaw = atan2(-to.x, -to.z)
+        let yawError = atan2(sinf(desiredYaw - ship.node.eulerAngles.y),
+                             cosf(desiredYaw - ship.node.eulerAngles.y))
+        ship.velocity.x = min(max(-yawError * 57.3 * 0.08, -1.6), 1.6)   // yawDegrees -= velocity.x
+        ship.velocity.y = min(max(-to.y * 0.08, -0.45), 0.45)            // dy/dt = -15 * velocity.y
+
+        demoFireTimer -= deltaTime
+        if demoFireTimer <= 0 {
+            demoFireTimer = 1.2
+            logic.autoFire(duration: 30)
+        }
     }
 
     private func applyShipFlash(_ flash: Bool) {

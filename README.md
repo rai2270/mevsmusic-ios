@@ -51,6 +51,7 @@ Open `mevsmusic.xcodeproj`, select the **mevsmusic** scheme, and run. That's it 
 
 - Xcode 16 or newer, iOS 17 deployment target, landscape only.
 - Music-library access is requested only for listing your songs; the demo tracks and Files picker work without it.
+- **Demo autopilot** (screenshots/trailers): launch with the `DEMO` environment variable set (Xcode scheme, or `SIMCTL_CHILD_DEMO=1 xcrun simctl launch ...`) and the game starts the bundled track by itself, flies toward pickups and autofires. Unreachable in normal use — it only activates through that variable.
 
 ## Credits
 

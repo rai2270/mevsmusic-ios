@@ -131,10 +131,20 @@ final class MenuViewController: UIViewController {
         starfield.emitterPosition = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
     }
 
+    // Demo autopilot (DEMO env var, see GameRenderer): jump straight into the
+    // bundled track so captures need no interaction.
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard ProcessInfo.processInfo.environment["DEMO"] != nil, presentedViewController == nil,
+              let url = Bundle.main.url(forResource: "Sunset", withExtension: "mp3") else { return }
+        launch(Track(title: "Sunset.mp3", url: url))
+    }
+
     // Android reloaded the list on every onResume.
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        if MPMediaLibrary.authorizationStatus() == .notDetermined {
+        if ProcessInfo.processInfo.environment["DEMO"] == nil,   // no prompts during captures
+           MPMediaLibrary.authorizationStatus() == .notDetermined {
             MPMediaLibrary.requestAuthorization { _ in
                 Task { @MainActor [weak self] in self?.loadList() }
             }
