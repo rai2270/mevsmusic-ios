@@ -142,6 +142,9 @@ final class ChordParticles: SpriteParticles {
     private static let yMax: Float = -50 - GameRenderer.roomEdge
 
     private(set) var states: [State]
+    // Presentation hook: the renderer spawns a spark burst here on every explosion.
+    var onExplode: ((simd_float3, UIColor) -> Void)?
+    private let burstColor: UIColor
     private var velocities: [simd_float3]
     private var speeds: [Float]
     private var frames: [Int]
@@ -150,7 +153,8 @@ final class ChordParticles: SpriteParticles {
     private var explodeFrames: [Int]
     private var frameTimer = ChordParticles.frameInterval
 
-    init(count: Int, imageNamed imageName: String) {
+    init(count: Int, imageNamed imageName: String, burstColor: UIColor) {
+        self.burstColor = burstColor
         states = [State](repeating: .inactive, count: count)
         velocities = [simd_float3](repeating: .zero, count: count)
         speeds = (0..<count).map { _ in .random(in: Self.speedRange) }
@@ -159,7 +163,7 @@ final class ChordParticles: SpriteParticles {
         aliveFrames = (0..<count).map { _ in Int.random(in: 0..<Self.aliveFrameCount) }
         explodeFrames = [Int](repeating: 0, count: count)
         super.init(count: count, imageNamed: imageName, size: 1.8, tileRows: 8,
-                   emissionIntensity: 0.5)
+                   emissionIntensity: 0.9)
     }
 
     func spawn(at position: simd_float3, toward shipPosition: simd_float3) -> Bool {
@@ -174,6 +178,7 @@ final class ChordParticles: SpriteParticles {
     // particle frees itself when it finishes.
     func explode(_ index: Int) {
         states[index] = .explode
+        onExplode?(positions[index], burstColor)
     }
 
     func update(deltaTime: Float) {
@@ -257,7 +262,7 @@ final class BonusParticles: SpriteParticles {
     init(imageNamed imageName: String) {
         frames = [Int.random(in: 0..<Self.totalFrames)]
         super.init(count: 1, imageNamed: imageName, size: 1.8, tileRows: 8,
-                   emissionIntensity: 0.7)
+                   emissionIntensity: 0.9)
     }
 
     func spawn(at position: simd_float3) {

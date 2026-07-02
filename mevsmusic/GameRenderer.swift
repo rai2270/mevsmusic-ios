@@ -39,6 +39,9 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     private var lastTime: TimeInterval?
     private var shipFlashApplied = false
     private var gameOverSceneCleaned = false
+    private var shakeTime: Float = 0
+    private var shakeClock: Float = 0
+    private var wasShipHit = false
 
     // Input written from the main thread, consumed on the render thread.
     private let inputLock = NSLock()
@@ -49,31 +52,23 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     private var accelerometerStart: simd_float3?
     private var accelerometerVelocity: simd_float2?
 
-    init(logic: GameLogic, audio: AudioEngine, events: GameEvents, useAccelerometer: Bool = false) throws {
+    init(logic: GameLogic, audio: AudioEngine, events: GameEvents, useAccelerometer: Bool = false) {
         self.logic = logic
         self.audio = audio
         self.events = events
         self.useAccelerometer = useAccelerometer
 
-        ship = try Ship()
+        ship = Ship()
 
-        let room = try GameAssets.loadOBJ(named: "room")
-        let roomMaterial = GameAssets.unlitMaterial(imageNamed: "room7.jpg")
-        roomMaterial.isDoubleSided = true   // viewed from inside
-        room.enumerateHierarchy { child, _ in
-            child.geometry?.materials = [roomMaterial]
-            child.castsShadow = false       // the enclosure must not shadow its interior
-        }
-        room.simdScale = simd_float3(Self.roomHalf, Self.roomSize * 0.125, Self.roomHalf)
-        room.simdPosition = simd_float3(0, -Self.roomSize * (0.5 - 0.125), 0)
+        bars = (0..<GameLogic.spectrumBinCount).map { SpectrumBar(index: $0) }
 
-        bars = (0..<GameLogic.spectrumBinCount).map { SpectrumBar(index: $0, imageNamed: "building3.jpg") }
-
-        chordGroups = ["c4.png", "c5.png", "c6.png"].map {
-            ChordParticles(count: Self.chordsPerGroup, imageNamed: $0)
+        chordGroups = [("chord_cyan.png", UIColor(red: 0.2, green: 0.85, blue: 1, alpha: 1)),
+                       ("chord_magenta.png", UIColor(red: 1, green: 0.25, blue: 0.85, alpha: 1)),
+                       ("chord_amber.png", UIColor(red: 1, green: 0.7, blue: 0.2, alpha: 1))].map {
+            ChordParticles(count: Self.chordsPerGroup, imageNamed: $0.0, burstColor: $0.1)
         }
         // Indexed by GameLogic.BonusSlot.rawValue (the original's bonusTextures order).
-        bonuses = ["threerings.png", "b1knew.png", "b5knew.png", "b40knew.png", "bship.png", "b25knew.png"]
+        bonuses = ["bonus_rings.png", "bonus_1k.png", "bonus_5k.png", "bonus_40k.png", "bonus_ship.png", "bonus_25k.png"]
             .map { BonusParticles(imageNamed: $0) }
 
         // Pickup spots above selected bars; slot 5 mixes bin 7's x with bin 5's y/z,
@@ -93,7 +88,7 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         super.init()
 
         let root = scene.rootNode
-        root.addChildNode(room)
+        installArena(in: root)
         bars.forEach { root.addChildNode($0.node) }
         root.addChildNode(ship.node)
         ship.rings.forEach(root.addChildNode)
@@ -126,8 +121,19 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         installSunlight(in: root)
         installFloorEffects(in: root)
         installEngineExhaust()
+        chordGroups.forEach { group in
+            group.onExplode = { [weak self] position, color in
+                self?.spawnBurst(at: position, color: color)
+            }
+        }
 
-        updateChaseCamera()
+        // Atmospheric depth: the arena edges recede into the night.
+        scene.fogColor = UIColor(red: 0.02, green: 0.02, blue: 0.07, alpha: 1)
+        scene.fogStartDistance = 45
+        scene.fogEndDistance = 340
+        scene.fogDensityExponent = 1.5
+
+        updateChaseCamera(deltaTime: 0)
     }
 
     // MARK: - Modern rendering (feature/high_quality)
@@ -138,12 +144,70 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         camera.wantsHDR = true
         camera.wantsExposureAdaptation = false   // stable music lighting, no pumping
         camera.bloomThreshold = 1.0              // only emissive surfaces bloom
-        camera.bloomIntensity = 0.7
-        camera.bloomBlurRadius = 10
+        camera.bloomIntensity = 0.85
+        camera.bloomBlurRadius = 12
+        camera.motionBlurIntensity = 0.35
         camera.vignettingPower = 0.7
         camera.vignettingIntensity = 0.5
-        camera.saturation = 1.08
-        camera.contrast = 1.04
+        camera.grainIntensity = 0.05             // subtle cinematic grain
+        camera.grainIsColored = false
+        camera.saturation = 1.1
+        camera.contrast = 1.05
+    }
+
+    // The night arena: neon grid floor, city-skyline walls, starfield above.
+    // Same 200x50x200 play volume as the original room, restyled.
+    private func installArena(in root: SCNNode) {
+        func panel(_ plane: SCNPlane, image: String, emission: CGFloat) -> SCNNode {
+            let material = GameAssets.unlitMaterial(imageNamed: image, emission: emission)
+            plane.materials = [material]
+            let node = SCNNode(geometry: plane)
+            node.castsShadow = false
+            return node
+        }
+
+        let floor = panel(SCNPlane(width: CGFloat(Self.roomSize), height: CGFloat(Self.roomSize)),
+                          image: "floor_grid.png", emission: 0.8)
+        if let material = floor.geometry?.firstMaterial {
+            material.diffuse.wrapS = .repeat
+            material.diffuse.wrapT = .repeat
+            material.diffuse.contentsTransform = SCNMatrix4MakeScale(4, 4, 1)
+            material.emission.wrapS = .repeat
+            material.emission.wrapT = .repeat
+            material.emission.contentsTransform = material.diffuse.contentsTransform
+        }
+        floor.eulerAngles.x = -.pi / 2
+        floor.simdPosition = simd_float3(0, -Self.roomHalf, 0)
+        root.addChildNode(floor)
+
+        let ceiling = panel(SCNPlane(width: CGFloat(Self.roomSize), height: CGFloat(Self.roomSize)),
+                            image: "ceiling_stars.png", emission: 0.45)
+        ceiling.eulerAngles.x = .pi / 2
+        ceiling.simdPosition = simd_float3(0, -50, 0)
+        root.addChildNode(ceiling)
+
+        // Four skyline walls closing the 50-unit-tall play band, facing inward.
+        let wallHeight: CGFloat = 50
+        let placements: [(simd_float3, Float)] = [
+            (simd_float3(0, -75, -Self.roomHalf), 0),
+            (simd_float3(0, -75, Self.roomHalf), .pi),
+            (simd_float3(-Self.roomHalf, -75, 0), .pi / 2),
+            (simd_float3(Self.roomHalf, -75, 0), -.pi / 2),
+        ]
+        for (position, yaw) in placements {
+            let wall = panel(SCNPlane(width: CGFloat(Self.roomSize), height: wallHeight),
+                             image: "wall_skyline.png", emission: 0.4)
+            if let material = wall.geometry?.firstMaterial {
+                // Tile the skyline so buildings stay believable up close.
+                material.diffuse.wrapS = .repeat
+                material.diffuse.contentsTransform = SCNMatrix4MakeScale(3, 1, 1)
+                material.emission.wrapS = .repeat
+                material.emission.contentsTransform = material.diffuse.contentsTransform
+            }
+            wall.simdPosition = position
+            wall.eulerAngles.y = yaw
+            root.addChildNode(wall)
+        }
     }
 
     // Procedural sky cube as image-based lighting for the PBR ship and rings.
@@ -201,27 +265,55 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         root.addChildNode(floorNode)
     }
 
-    // Additive engine trail behind the ship (world-space, so it streaks).
+    // Additive engine trails behind each engine (world-space, so they streak).
     private func installEngineExhaust() {
-        let exhaust = SCNParticleSystem()
-        exhaust.emitterShape = SCNSphere(radius: 0.04)
-        exhaust.birthRate = 70
-        exhaust.particleLifeSpan = 0.22
-        exhaust.particleLifeSpanVariation = 0.06
-        exhaust.particleVelocity = 10
-        exhaust.particleVelocityVariation = 2.5
-        exhaust.emittingDirection = SCNVector3(0, 0, 1)   // ship-local backward
-        exhaust.spreadingAngle = 5
-        exhaust.particleSize = 0.22
-        exhaust.particleSizeVariation = 0.08
-        exhaust.particleImage = UIImage(named: "flare.png")
-        exhaust.particleColor = UIColor(red: 0.35, green: 0.6, blue: 1, alpha: 0.5)
-        exhaust.blendMode = .additive
-        exhaust.isLightingEnabled = false
-        let mount = SCNNode()
-        mount.position = SCNVector3(0, 0.05, 1.3)
-        mount.addParticleSystem(exhaust)
-        ship.node.addChildNode(mount)
+        for side: Float in [-1, 1] {
+            let exhaust = SCNParticleSystem()
+            exhaust.emitterShape = SCNSphere(radius: 0.03)
+            exhaust.birthRate = 60
+            exhaust.particleLifeSpan = 0.22
+            exhaust.particleLifeSpanVariation = 0.06
+            exhaust.particleVelocity = 10
+            exhaust.particleVelocityVariation = 2.5
+            exhaust.emittingDirection = SCNVector3(0, 0, 1)   // ship-local backward
+            exhaust.spreadingAngle = 5
+            exhaust.particleSize = 0.20
+            exhaust.particleSizeVariation = 0.08
+            exhaust.particleImage = UIImage(named: "flare.png")
+            exhaust.particleColor = UIColor(red: 0.35, green: 0.7, blue: 1, alpha: 0.55)
+            exhaust.blendMode = .additive
+            exhaust.isLightingEnabled = false
+            let mount = SCNNode()
+            mount.position = SCNVector3(side * 0.17, 0, 0.5)
+            mount.addParticleSystem(exhaust)
+            ship.node.addChildNode(mount)
+        }
+    }
+
+    // One-shot additive spark burst (chord explosions, pickups, the ship's demise).
+    private func spawnBurst(at position: simd_float3, color: UIColor,
+                            count: CGFloat = 130, speed: CGFloat = 9, size: CGFloat = 0.3) {
+        let burst = SCNParticleSystem()
+        burst.loops = false
+        burst.emissionDuration = 0.05
+        burst.birthRate = count / 0.05
+        burst.particleLifeSpan = 0.5
+        burst.particleLifeSpanVariation = 0.2
+        burst.particleVelocity = speed
+        burst.particleVelocityVariation = speed * 0.6
+        burst.emitterShape = SCNSphere(radius: 0.1)
+        burst.birthDirection = .random
+        burst.particleSize = size
+        burst.particleSizeVariation = size * 0.5
+        burst.particleImage = UIImage(named: "flare.png")
+        burst.particleColor = color
+        burst.blendMode = .additive
+        burst.isLightingEnabled = false
+        let node = SCNNode()
+        node.simdPosition = position
+        node.addParticleSystem(burst)
+        scene.rootNode.addChildNode(node)
+        node.runAction(.sequence([.wait(duration: 1.2), .removeFromParentNode()]))
     }
 
     // Resets frame timing (after the app returns to the foreground).
@@ -278,7 +370,7 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         }
         if logic.state == .finished {
             handleGameOver(deltaTime)
-            updateChaseCamera()
+            updateChaseCamera(deltaTime: deltaTime)
             return
         }
 
@@ -292,7 +384,7 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         if logic.songCheckDue(deltaTime: deltaTime), audio.hasFinishedPlaying {
             logic.songEnded()
         }
-        updateChaseCamera()
+        updateChaseCamera(deltaTime: deltaTime)
     }
 
     private func updateDisplayList(_ deltaTime: Float) {
@@ -315,6 +407,10 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         if logic.state == .running {
             ship.update(deltaTime: deltaTime, isRingOn: logic.isRingOn)
             applyShipFlash(logic.isShipHit && logic.isShipFlashOn)
+            if logic.isShipHit && !wasShipHit {
+                shakeTime = 0.45   // camera impact kick, presentation only
+            }
+            wasShipHit = logic.isShipHit
         }
 
         for _ in 0..<fires { fire() }
@@ -380,6 +476,9 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
             guard let slot = GameLogic.BonusSlot(rawValue: slotIndex) else { continue }
             for i in bonus.nodes.indices where bonus.isAlive[i] {
                 if withinManhattanDistance(bonus.positions[i], shipPosition, Self.collisionDistance) {
+                    spawnBurst(at: bonus.positions[i],
+                               color: UIColor(red: 1, green: 0.9, blue: 0.5, alpha: 1),
+                               count: 80, speed: 6, size: 0.25)
                     logic.bonusCollected(slot)
                     bonus.deactivate(i)
                 }
@@ -451,9 +550,17 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
 
     // MARK: - Chase camera
 
-    private func updateChaseCamera() {
+    private func updateChaseCamera(deltaTime: Float) {
         let yaw = ship.node.eulerAngles.y
-        let offset = simd_float3(3 * sin(yaw), 0.6, 3 * cos(yaw))   // (0, 0.6, 3) rotated by yaw
+        var offset = simd_float3(3 * sin(yaw), 0.6, 3 * cos(yaw))   // (0, 0.6, 3) rotated by yaw
+        // Decaying impact shake when the ship is hit.
+        shakeClock += deltaTime
+        if shakeTime > 0 {
+            shakeTime = max(0, shakeTime - deltaTime)
+            let amplitude = shakeTime * shakeTime * 0.9
+            offset += simd_float3(sin(shakeClock * 47) * amplitude,
+                                  sin(shakeClock * 61) * amplitude, 0)
+        }
         cameraNode.simdPosition = ship.node.simdPosition + offset
         cameraYaw += 0.05 * (yaw - cameraYaw)
         cameraNode.eulerAngles = SCNVector3(0, cameraYaw, 0)
@@ -464,6 +571,9 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     private func handleGameOver(_ deltaTime: Float) {
         if !gameOverSceneCleaned {
             gameOverSceneCleaned = true
+            spawnBurst(at: ship.node.simdPosition,
+                       color: UIColor(red: 0.5, green: 0.85, blue: 1, alpha: 1),
+                       count: 320, speed: 14, size: 0.4)
             ship.node.removeFromParentNode()
             ship.rings.forEach { $0.removeFromParentNode() }
             bullets.containerNode.removeFromParentNode()

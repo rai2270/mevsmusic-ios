@@ -30,13 +30,15 @@ final class MenuViewController: UIViewController {
     }
 
     private static let infoURL = "http://mevsmusic.netau.net/m/"
-    private static let rowTextColor = UIColor(white: 1, alpha: 0xaa / 255.0)
-    private static let gradientTop = UIColor(red: 0, green: 0, blue: 0x80 / 255.0, alpha: 1)
-    private static let gradientBottom = UIColor(red: 0x64 / 255.0, green: 0x95 / 255.0, blue: 0xed / 255.0, alpha: 1)
+    private static let rowTextColor = UIColor(white: 1, alpha: 0.92)
+    private static let gradientTop = UIColor(red: 0.02, green: 0.01, blue: 0.08, alpha: 1)
+    private static let gradientBottom = UIColor(red: 0.09, green: 0.05, blue: 0.22, alpha: 1)
 
     private let gradient = CAGradientLayer()
-    private let introView = UIImageView(image: UIImage(named: "intro.png"))
+    private let starfield = CAEmitterLayer()
+    private let introView = UIImageView(image: UIImage(named: "logo.png"))
     private let chooseLabel = UILabel()
+    private let optionsButton = UIButton(type: .system)
     private let tableView = UITableView()
     private var rows: [Row] = []
 
@@ -49,53 +51,84 @@ final class MenuViewController: UIViewController {
 
         gradient.colors = [Self.gradientTop.cgColor, Self.gradientBottom.cgColor]
         view.layer.addSublayer(gradient)
+        installStarfield()
 
         introView.contentMode = .scaleAspectFit
         introView.isUserInteractionEnabled = true
         introView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(showOptions)))
 
         chooseLabel.attributedText = NSAttributedString(
-            string: "Choose Your Music:",
-            attributes: [.underlineStyle: NSUnderlineStyle.single.rawValue])
+            string: "CHOOSE YOUR MUSIC",
+            attributes: [.kern: 3.5])
         chooseLabel.font = {
-            let bold = UIFont.systemFont(ofSize: 20, weight: .bold)
-            guard let descriptor = bold.fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) else {
-                return bold
-            }
-            return UIFont(descriptor: descriptor, size: 20)
+            let base = UIFont.systemFont(ofSize: 14, weight: .semibold)
+            let descriptor = base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor
+            return UIFont(descriptor: descriptor, size: 14)
         }()
-        chooseLabel.textColor = .white
+        chooseLabel.textColor = UIColor(white: 1, alpha: 0.55)
         chooseLabel.textAlignment = .center
+
+        optionsButton.setImage(UIImage(systemName: "gearshape.fill",
+                                       withConfiguration: UIImage.SymbolConfiguration(pointSize: 22)), for: .normal)
+        optionsButton.tintColor = UIColor(white: 1, alpha: 0.75)
+        optionsButton.addTarget(self, action: #selector(showOptions), for: .touchUpInside)
 
         tableView.dataSource = self
         tableView.delegate = self
         tableView.backgroundColor = .clear
-        tableView.separatorColor = UIColor(white: 1, alpha: 0.25)
+        tableView.separatorStyle = .none
+        tableView.rowHeight = 54
 
-        for subview in [introView, chooseLabel, tableView] {
+        for subview in [introView, chooseLabel, optionsButton, tableView] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
         }
         let safe = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
-            introView.topAnchor.constraint(equalTo: safe.topAnchor, constant: 4),
+            introView.topAnchor.constraint(equalTo: safe.topAnchor, constant: 8),
             introView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             introView.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor, multiplier: 0.3),
+            introView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.55),
 
-            chooseLabel.topAnchor.constraint(equalTo: introView.bottomAnchor, constant: 4),
+            optionsButton.topAnchor.constraint(equalTo: safe.topAnchor, constant: 12),
+            optionsButton.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16),
+
+            chooseLabel.topAnchor.constraint(equalTo: introView.bottomAnchor, constant: 10),
             chooseLabel.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
             chooseLabel.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
 
-            tableView.topAnchor.constraint(equalTo: chooseLabel.bottomAnchor, constant: 4),
-            tableView.leadingAnchor.constraint(equalTo: safe.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: safe.trailingAnchor),
+            tableView.topAnchor.constraint(equalTo: chooseLabel.bottomAnchor, constant: 8),
+            tableView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            tableView.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.62),
             tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    // Slowly drifting stars behind the menu.
+    private func installStarfield() {
+        starfield.emitterShape = .rectangle
+        starfield.renderMode = .additive
+        let star = CAEmitterCell()
+        star.contents = UIImage(named: "flare.png")?.cgImage
+        star.birthRate = 2.5
+        star.lifetime = 40
+        star.velocity = 8
+        star.velocityRange = 6
+        star.emissionRange = .pi * 2
+        star.scale = 0.015
+        star.scaleRange = 0.02
+        star.alphaSpeed = -0.02
+        star.color = UIColor(white: 1, alpha: 0.7).cgColor
+        starfield.emitterCells = [star]
+        view.layer.addSublayer(starfield)
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         gradient.frame = view.bounds
+        starfield.frame = view.bounds
+        starfield.emitterSize = view.bounds.size
+        starfield.emitterPosition = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
     }
 
     // Android reloaded the list on every onResume.
@@ -186,14 +219,27 @@ extension MenuViewController: UITableViewDataSource, UITableViewDelegate {
         switch rows[indexPath.row] {
         case .track(let track):
             content.text = track.title
+            content.image = UIImage(systemName: "music.note")
         case .pickFromDevice:
-            content.text = ".. (pick a song from my device)"
+            content.text = "Pick a song from my device…"
+            content.image = UIImage(systemName: "folder")
         }
-        content.textProperties.alignment = .center
-        content.textProperties.font = .systemFont(ofSize: 20)
+        content.textProperties.font = {
+            let base = UIFont.systemFont(ofSize: 17, weight: .medium)
+            let descriptor = base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor
+            return UIFont(descriptor: descriptor, size: 17)
+        }()
         content.textProperties.color = Self.rowTextColor
+        content.imageProperties.tintColor = UIColor(red: 0.35, green: 0.9, blue: 1, alpha: 0.9)
         cell.contentConfiguration = content
-        cell.backgroundColor = .clear
+
+        // Frosted card rows.
+        var background = UIBackgroundConfiguration.clear()
+        background.backgroundColor = UIColor(white: 1, alpha: 0.07)
+        background.cornerRadius = 12
+        background.backgroundInsets = NSDirectionalEdgeInsets(top: 3, leading: 0, bottom: 3, trailing: 0)
+        cell.backgroundConfiguration = background
+        cell.selectionStyle = .none
         return cell
     }
 

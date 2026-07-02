@@ -8,11 +8,11 @@ import CoreMotion
 class GameViewController: UIViewController {
 
     private static let joystickSize: CGFloat = 180          // JOYSTICK_SIZE
-    private static let hudAlpha: CGFloat = 0x90 / 255.0
-    private static let hudBlue = UIColor(red: 0, green: 0xbf / 255.0, blue: 1, alpha: hudAlpha)
-    private static let hudCyan = UIColor(red: 0, green: 1, blue: 1, alpha: hudAlpha)
-    private static let gameOverCyan = UIColor(red: 0, green: 1, blue: 1, alpha: 1)
-    private static let gameOverGreen = UIColor(red: 0x37 / 255.0, green: 1, blue: 0x37 / 255.0, alpha: 1)
+    private static let hudWhite = UIColor(white: 1, alpha: 0.95)
+    private static let hudCyan = UIColor(red: 0.35, green: 0.95, blue: 1, alpha: 0.95)
+    private static let glowCyan = UIColor(red: 0, green: 0.8, blue: 1, alpha: 1)
+    private static let glowMagenta = UIColor(red: 1, green: 0.2, blue: 0.85, alpha: 1)
+    private static let gameOverAccent = UIColor(red: 0.55, green: 0.95, blue: 1, alpha: 1)
 
     private let track: Track
     private let useAccelerometer: Bool
@@ -25,12 +25,14 @@ class GameViewController: UIViewController {
     private var gameRenderer: GameRenderer?
 
     private let scoreLabel = UILabel()
+    private let scoreCapsule = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let countdownLabel = UILabel()
     private let shipsRow = UIStackView()
     private var shipIcons: [UIImageView] = []
-    private let joystickView = UIImageView(image: UIImage(named: "dpad3.png"))
+    private let joystickView = UIImageView(image: UIImage(named: "joystick.png"))
     private let loadingView = UIImageView(image: UIImage(named: "loading.png"))
     private let gameOverStack = UIStackView()
+    private let gameOverCard = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private var joystickTouch: UITouch?
 
     private var savedTitle = ""
@@ -90,8 +92,8 @@ class GameViewController: UIViewController {
             let logic = GameLogic(events: self,
                                   title: track.title,
                                   sampleRate: audio.sampleRate)
-            let renderer = try GameRenderer(logic: logic, audio: audio, events: self,
-                                            useAccelerometer: useAccelerometer)
+            let renderer = GameRenderer(logic: logic, audio: audio, events: self,
+                                        useAccelerometer: useAccelerometer)
             self.audio = audio
             self.logic = logic
             self.gameRenderer = renderer
@@ -172,25 +174,42 @@ class GameViewController: UIViewController {
     private func buildHUD() {
         guard let view = scnView else { return }
 
-        countdownLabel.font = boldItalicFont(size: 0.2 * screenWidth)
+        countdownLabel.font = hudFont(size: 0.2 * screenWidth)
         countdownLabel.textColor = Self.hudCyan
         countdownLabel.textAlignment = .center
+        addGlow(countdownLabel, color: Self.glowCyan, radius: 14)
 
-        scoreLabel.font = boldItalicFont(size: 0.05 * screenWidth)
-        scoreLabel.textColor = Self.hudBlue
+        scoreLabel.font = hudFont(size: 0.042 * screenWidth)
+        scoreLabel.textColor = Self.hudWhite
         scoreLabel.textAlignment = .center
+        addGlow(scoreLabel, color: Self.glowCyan, radius: 6)
+        scoreCapsule.layer.cornerRadius = 16
+        scoreCapsule.clipsToBounds = true
+        scoreLabel.translatesAutoresizingMaskIntoConstraints = false
+        scoreCapsule.contentView.addSubview(scoreLabel)
 
-        shipIcons = (1...GameLogic.maxShipCount).map {
-            UIImageView(image: UIImage(named: "ship_lives\($0).png"))
+        shipIcons = (1...GameLogic.maxShipCount).map { _ in
+            let icon = UIImageView(image: UIImage(named: "ship_life.png"))
+            icon.widthAnchor.constraint(equalToConstant: 26).isActive = true
+            icon.heightAnchor.constraint(equalToConstant: 26).isActive = true
+            return icon
         }
         shipsRow.axis = .horizontal
+        shipsRow.spacing = 5
         shipIcons.forEach(shipsRow.addArrangedSubview)
+
+        joystickView.alpha = 0.9
+        loadingView.contentMode = .scaleAspectFit
 
         gameOverStack.axis = .vertical
         gameOverStack.alignment = .center
-        gameOverStack.spacing = 4
+        gameOverStack.spacing = 6
+        gameOverStack.translatesAutoresizingMaskIntoConstraints = false
+        gameOverCard.layer.cornerRadius = 24
+        gameOverCard.clipsToBounds = true
+        gameOverCard.contentView.addSubview(gameOverStack)
 
-        for subview in [loadingView, joystickView, countdownLabel, scoreLabel, shipsRow, gameOverStack] {
+        for subview in [loadingView, joystickView, countdownLabel, scoreCapsule, shipsRow, gameOverCard] {
             subview.isHidden = true
             subview.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(subview)
@@ -200,12 +219,18 @@ class GameViewController: UIViewController {
         NSLayoutConstraint.activate([
             loadingView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             loadingView.topAnchor.constraint(equalTo: safe.topAnchor, constant: 20),
+            loadingView.widthAnchor.constraint(equalToConstant: 320),
+            loadingView.heightAnchor.constraint(equalToConstant: 80),
 
             countdownLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             countdownLabel.topAnchor.constraint(equalTo: safe.topAnchor),
 
-            scoreLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            scoreLabel.bottomAnchor.constraint(equalTo: safe.bottomAnchor),
+            scoreCapsule.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            scoreCapsule.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -6),
+            scoreLabel.leadingAnchor.constraint(equalTo: scoreCapsule.contentView.leadingAnchor, constant: 16),
+            scoreLabel.trailingAnchor.constraint(equalTo: scoreCapsule.contentView.trailingAnchor, constant: -16),
+            scoreLabel.topAnchor.constraint(equalTo: scoreCapsule.contentView.topAnchor, constant: 4),
+            scoreLabel.bottomAnchor.constraint(equalTo: scoreCapsule.contentView.bottomAnchor, constant: -4),
 
             shipsRow.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -10),
             shipsRow.bottomAnchor.constraint(equalTo: safe.bottomAnchor, constant: -10),
@@ -215,24 +240,37 @@ class GameViewController: UIViewController {
             joystickView.widthAnchor.constraint(equalToConstant: Self.joystickSize),
             joystickView.heightAnchor.constraint(equalToConstant: Self.joystickSize),
 
-            gameOverStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            gameOverStack.topAnchor.constraint(equalTo: safe.topAnchor, constant: 10),
+            gameOverCard.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            gameOverCard.topAnchor.constraint(equalTo: safe.topAnchor, constant: 10),
+            gameOverStack.leadingAnchor.constraint(equalTo: gameOverCard.contentView.leadingAnchor, constant: 28),
+            gameOverStack.trailingAnchor.constraint(equalTo: gameOverCard.contentView.trailingAnchor, constant: -28),
+            gameOverStack.topAnchor.constraint(equalTo: gameOverCard.contentView.topAnchor, constant: 16),
+            gameOverStack.bottomAnchor.constraint(equalTo: gameOverCard.contentView.bottomAnchor, constant: -16),
         ])
     }
 
-    private func boldItalicFont(size: CGFloat) -> UIFont {
-        let bold = UIFont.systemFont(ofSize: size, weight: .bold)
-        guard let descriptor = bold.fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) else {
-            return bold
-        }
+    private func hudFont(size: CGFloat, weight: UIFont.Weight = .heavy) -> UIFont {
+        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        let descriptor = base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor
         return UIFont(descriptor: descriptor, size: size)
     }
 
-    private func makeGameOverLabel(_ text: String, size: CGFloat, color: UIColor) -> UILabel {
+    private func addGlow(_ label: UILabel, color: UIColor, radius: CGFloat) {
+        label.layer.shadowColor = color.cgColor
+        label.layer.shadowRadius = radius
+        label.layer.shadowOpacity = 0.9
+        label.layer.shadowOffset = .zero
+    }
+
+    private func makeGameOverLabel(_ text: String, size: CGFloat, color: UIColor,
+                                   glow: UIColor? = nil) -> UILabel {
         let label = UILabel()
         label.text = text
-        label.font = boldItalicFont(size: size)
+        label.font = hudFont(size: size)
         label.textColor = color
+        if let glow {
+            addGlow(label, color: glow, radius: 10)
+        }
         return label
     }
 
@@ -240,7 +278,7 @@ class GameViewController: UIViewController {
         guard HighScore.scores[rank] != 0 else { return }
         let text = "\(rank + 1).  \(HighScore.viewTrack(at: rank))  \(HighScore.scores[rank])"
         gameOverStack.addArrangedSubview(
-            makeGameOverLabel(text, size: 0.03 * screenWidth, color: Self.gameOverGreen))
+            makeGameOverLabel(text, size: 0.026 * screenWidth, color: Self.gameOverAccent))
     }
 
     // MARK: - Touch input (onTouch port)
@@ -306,7 +344,7 @@ extension GameViewController: GameEvents {
         Task { @MainActor in
             self.countdownLabel.isHidden = true
             self.shipsRow.isHidden = false
-            self.scoreLabel.isHidden = false
+            self.scoreCapsule.isHidden = false
         }
     }
 
@@ -321,7 +359,14 @@ extension GameViewController: GameEvents {
     nonisolated func onStatusUpdate(_ status: String, isCountDown: Bool) {
         Task { @MainActor in
             if isCountDown {
+                guard self.countdownLabel.text != status else { return }
                 self.countdownLabel.text = status
+                // Punch-in pulse on every countdown tick.
+                self.countdownLabel.transform = CGAffineTransform(scaleX: 1.3, y: 1.3)
+                UIView.animate(withDuration: 0.45, delay: 0, usingSpringWithDamping: 0.45,
+                               initialSpringVelocity: 0) {
+                    self.countdownLabel.transform = .identity
+                }
             } else {
                 self.scoreLabel.text = status
             }
@@ -339,19 +384,26 @@ extension GameViewController: GameEvents {
     nonisolated func gameOverStringTime() {
         Task { @MainActor in
             self.joystickView.isHidden = true
-            self.gameOverStack.isHidden = false
+            self.gameOverCard.isHidden = false
+            self.gameOverCard.transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
+            UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.55,
+                           initialSpringVelocity: 0) {
+                self.gameOverCard.transform = .identity
+            }
             self.gameOverStack.addArrangedSubview(
-                self.makeGameOverLabel("GAME OVER", size: 0.07 * self.screenWidth, color: Self.gameOverCyan))
+                self.makeGameOverLabel("GAME OVER", size: 0.06 * self.screenWidth,
+                                       color: Self.hudWhite, glow: Self.glowMagenta))
         }
     }
 
     nonisolated func gameOverTitleTime() {
         Task { @MainActor in
-            let size = 0.03 * self.screenWidth
+            let size = 0.028 * self.screenWidth
             self.gameOverStack.addArrangedSubview(
-                self.makeGameOverLabel("  \(self.savedTitle)", size: size, color: Self.gameOverGreen))
+                self.makeGameOverLabel(self.savedTitle, size: size, color: Self.hudWhite))
             self.gameOverStack.addArrangedSubview(
-                self.makeGameOverLabel("  Score: \(self.savedScore)", size: size, color: Self.gameOverGreen))
+                self.makeGameOverLabel("Score: \(self.savedScore)", size: size,
+                                       color: Self.hudCyan, glow: Self.glowCyan))
         }
     }
 
@@ -359,7 +411,8 @@ extension GameViewController: GameEvents {
         Task { @MainActor in
             guard HighScore.scores[0] != 0 else { return }
             self.gameOverStack.addArrangedSubview(
-                self.makeGameOverLabel("Top 3", size: 0.03 * self.screenWidth, color: Self.gameOverGreen))
+                self.makeGameOverLabel("TOP 3", size: 0.028 * self.screenWidth,
+                                       color: UIColor(white: 1, alpha: 0.6)))
         }
     }
 
