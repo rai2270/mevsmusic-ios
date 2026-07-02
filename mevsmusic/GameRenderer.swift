@@ -47,6 +47,7 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
     // the DEMO environment variable (Xcode scheme or simctl) — never in normal use.
     private let demoMode = ProcessInfo.processInfo.environment["DEMO"] != nil
     private var demoFireTimer: Float = 0
+    private var demoClock: Float = 0
 
     // Input written from the main thread, consumed on the render thread.
     private let inputLock = NSLock()
@@ -435,27 +436,48 @@ final class GameRenderer: NSObject, SCNSceneRendererDelegate {
         bonuses.forEach { $0.update(deltaTime: deltaTime) }
     }
 
-    // Demo autopilot: chase the nearest live pickup (or cruise through the bar
-    // rack), firing bursts so captures catch bullets, explosions and bonus grabs.
+    // Demo autopilot: dogfight the chords in 3D, dive for a floor pickup every
+    // so often, and fly a lazy figure-eight tour when the arena is quiet.
     private func demoSteer(_ deltaTime: Float) {
-        var target = simd_float3(0, -95, -20)
-        var bestDistance = Float.greatestFiniteMagnitude
+        demoClock += deltaTime
+        let shipPosition = ship.node.simdPosition
+
+        func nearest(_ candidates: [simd_float3]) -> simd_float3? {
+            candidates.min { simd_length($0 - shipPosition) < simd_length($1 - shipPosition) }
+        }
+        var bonusTargets: [simd_float3] = []
         for bonus in bonuses {
             for i in bonus.nodes.indices where bonus.isAlive[i] {
-                let distance = simd_length(bonus.positions[i] - ship.node.simdPosition)
-                if distance < bestDistance {
-                    bestDistance = distance
-                    target = bonus.positions[i]
-                }
+                bonusTargets.append(bonus.positions[i])
             }
         }
-        let to = target - ship.node.simdPosition
+        var chordTargets: [simd_float3] = []
+        for chords in chordGroups {
+            for i in chords.nodes.indices where chords.states[i] == .alive && chords.isAlive[i] {
+                chordTargets.append(chords.positions[i])
+            }
+        }
+
+        // Ten seconds of every twenty-four are reserved for pickup runs.
+        let wantsBonus = demoClock.truncatingRemainder(dividingBy: 24) >= 14
+        let target: simd_float3
+        if wantsBonus, let bonus = nearest(bonusTargets) {
+            target = bonus
+        } else if let chord = nearest(chordTargets) {
+            target = chord
+        } else if let bonus = nearest(bonusTargets) {
+            target = bonus
+        } else {
+            let angle = demoClock * 0.3
+            target = simd_float3(sinf(angle) * 55, -64 + sinf(angle * 1.6) * 16, cosf(angle * 0.5) * 55)
+        }
+        let to = target - shipPosition
         // Forward is (-sin(yaw), 0, -cos(yaw)); aim it along `to`.
         let desiredYaw = atan2(-to.x, -to.z)
         let yawError = atan2(sinf(desiredYaw - ship.node.eulerAngles.y),
                              cosf(desiredYaw - ship.node.eulerAngles.y))
-        ship.velocity.x = min(max(-yawError * 57.3 * 0.08, -1.6), 1.6)   // yawDegrees -= velocity.x
-        ship.velocity.y = min(max(-to.y * 0.08, -0.45), 0.45)            // dy/dt = -15 * velocity.y
+        ship.velocity.x = min(max(-yawError * 57.3 * 0.09, -2), 2)   // yawDegrees -= velocity.x
+        ship.velocity.y = min(max(-to.y * 0.1, -0.6), 0.6)           // dy/dt = -15 * velocity.y
 
         demoFireTimer -= deltaTime
         if demoFireTimer <= 0 {
