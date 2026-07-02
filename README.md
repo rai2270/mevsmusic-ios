@@ -4,6 +4,10 @@ Fly your ship against the spectrum of your own music.
 
 A native Swift port of [MeVsMusic](https://github.com/rai2270/MeVsMusic), the 2012 Android game built for a Samsung contest — rebuilt for iOS with SceneKit and AVFoundation, no third-party dependencies.
 
+![Dogfighting the chords over the dancing spectrum](docs/demo.gif)
+
+*Live gameplay — every bar is the song's spectrum, and the chords bursting out of it are yours to shoot.*
+
 ![The ring weapon volleying at every chord ahead while the spectrum dances](docs/ringweapon.png)
 
 *The ring weapon — grab the rings pickup and every shot becomes a volley at all the chords ahead of you.*
