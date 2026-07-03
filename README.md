@@ -4,6 +4,10 @@ Fly your ship against the spectrum of your own music.
 
 A native Swift port of [MeVsMusic](https://github.com/rai2270/MeVsMusic), the 2012 Android game built for a Samsung contest — rebuilt for iOS with SceneKit and AVFoundation, no third-party dependencies.
 
+![Dogfighting the chords over the dancing spectrum](docs/demo.gif)
+
+*Live gameplay — every bar is the song's spectrum, and the chords bursting out of it are yours to shoot.*
+
 ![The ring weapon volleying at every chord ahead while the spectrum dances](docs/ringweapon.png)
 
 *The ring weapon — grab the rings pickup and every shot becomes a volley at all the chords ahead of you.*
@@ -51,6 +55,7 @@ Open `mevsmusic.xcodeproj`, select the **mevsmusic** scheme, and run. That's it 
 
 - Xcode 16 or newer, iOS 17 deployment target, landscape only.
 - Music-library access is requested only for listing your songs; the demo tracks and Files picker work without it.
+- **Demo autopilot** (screenshots/trailers): launch with the `DEMO` environment variable set (Xcode scheme, or `SIMCTL_CHILD_DEMO=1 xcrun simctl launch ...`) and the game starts the bundled track by itself, flies toward pickups and autofires. Unreachable in normal use — it only activates through that variable.
 
 ## Credits
 
