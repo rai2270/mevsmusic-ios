@@ -22,6 +22,15 @@ Pick any song. Its live frequency spectrum becomes a wall of dancing bars inside
 
 Louder, busier music means more enemies. Choose your songs accordingly.
 
+## One game, three eras
+
+| 2012 — the Android original | The faithful port | The 1.2 redesign |
+|:--:|:--:|:--:|
+| ![Android original](docs/era-android.png) | ![Faithful iOS port](docs/era-port.png) | ![1.2 redesign](docs/gameplay.png) |
+| Rajawali/OpenGL, point sprites | same art, rebuilt on SceneKit | all-new art, HDR neon skyline |
+
+The middle step is the whole porting story: every texture, model and timing constant carried over from 2012 while the engine underneath became SceneKit and AVFoundation — [How MeVsMusic was ported from Android to iOS](docs/PORTING.md) walks through it. Version 1.2 then replaced every asset with new art. What has never changed is the game itself: all three screenshots are running the same rules — scoring, spawning, collisions — ported line-for-line from `GameLogic.java`.
+
 ## Controls
 
 - **Pad (bottom-left)** — steer: left/right turns, up/down climbs and dives. Touching the pad also fires.
