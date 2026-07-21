@@ -24,12 +24,14 @@ Louder, busier music means more enemies. Choose your songs accordingly.
 
 ## One game, three eras
 
-| 2012 — the Android original | The faithful port | The 1.2 redesign |
+| 2012 — the Android original | The faithful port (v1.0–1.1) | The redesign (v1.2) |
 |:--:|:--:|:--:|
 | ![Android original](docs/era-android.png) | ![Faithful iOS port](docs/era-port.png) | ![1.2 redesign](docs/gameplay.png) |
 | Rajawali/OpenGL, point sprites | same art, rebuilt on SceneKit | all-new art, HDR neon skyline |
 
 The middle step is the whole porting story: every texture, model and timing constant carried over from 2012 while the engine underneath became SceneKit and AVFoundation — [How MeVsMusic was ported from Android to iOS](docs/PORTING.md) walks through it. Version 1.2 then replaced every asset with new art. What has never changed is the game itself: all three screenshots are running the same rules — scoring, spawning, collisions — ported line-for-line from `GameLogic.java`.
+
+Each era is a tagged [release](https://github.com/rai2270/mevsmusic-ios/releases): [v1.0](https://github.com/rai2270/mevsmusic-ios/releases/tag/v1.0) is the first faithful port, [v1.1](https://github.com/rai2270/mevsmusic-ios/releases/tag/v1.1) adds the high-quality graphics pass, and [v1.2](https://github.com/rai2270/mevsmusic-ios/releases/tag/v1.2) is the redesign.
 
 ## Controls
 
